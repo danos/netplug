@@ -1,0 +1,19 @@
+Source: netplug
+Section: net
+Priority: optional
+Maintainer: Pali Rohár <pali.rohar@gmail.com>
+Build-Depends: debhelper (>= 9)
+Standards-Version: 3.9.8
+Homepage: http://www.red-bean.com/~bos/
+
+Package: netplug
+Architecture: linux-any
+Depends: ${shlibs:Depends}, ${misc:Depends}, iproute2 | iproute, lsb-base (>= 3.2-14)
+Description: network link monitor daemon
+ This daemon monitors the link status of network cards and configures
+ the network on plug- and un-plug-events.
+ .
+ It's similar to ifplugd, but uses NETLINK instead of regularly polling
+ the link status. This improves power-consumption with laptops, but does
+ not work with all network card. And it can't be configured to ignore short
+ unplugged or plugged periods like ifplugd.

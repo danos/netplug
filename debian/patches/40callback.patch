@@ -1,0 +1,21 @@
+Fix WIRELESS messages spamming syslog. (Bug #569226) 
+
+Some wireless network drivers send RTM_NEWLINK messages without a IFNAME, for
+which netplug each time prints two error messages to syslog.
+Search for "netlink wireless IFNAME" or for example see
+http://lists.shmoo.com/pipermail/hostap/2004-March/006227.html
+
+Change the debug level from ERROR to DEBUG and return success.
+--- a/main.c
++++ b/main.c
+@@ -64,8 +64,8 @@ handle_interface(struct nlmsghdr *hdr, v
+     parse_rtattrs(attrs, IFLA_MAX, IFLA_RTA(info), len);
+ 
+     if (attrs[IFLA_IFNAME] == NULL) {
+-        do_log(LOG_ERR, "No interface name");
+-        return -1;
++        do_log(LOG_DEBUG, "No interface name");
++        return 0;
+     }
+ 
+     char *name = RTA_DATA(attrs[IFLA_IFNAME]);

@@ -1,0 +1,14 @@
+#!/usr/bin/make -f
+# -*- makefile -*-
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+export initdir=$$(prefix)/etc/init.d
+export scriptdir=$$(prefix)/etc/netplug
+
+%:
+	dh $@
+
+override_dh_auto_install:
+	dh_auto_install
+	$(RM) debian/netplug/etc/init.d/netplugd

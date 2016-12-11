@@ -1,0 +1,113 @@
+Allow to specify custom script file via new param '-s' (Bug #702495)
+diff --git a/lib.c b/lib.c
+index 5507daf..46de348 100644
+--- a/lib.c
++++ b/lib.c
+@@ -29,6 +29,7 @@
+ 
+ #include "netplug.h"
+ 
++const char *script_file = NP_SCRIPT_DIR "/netplug";
+ 
+ void
+ do_log(int pri, const char *fmt, ...)
+@@ -109,11 +110,11 @@ run_netplug_bg(char *ifname, char *action)
+     setpgrp();                  /* become group leader */
+ 
+     do_log(LOG_INFO, "%s %s %s -> pid %d",
+-           NP_SCRIPT, ifname, action, getpid());
++           script_file, ifname, action, getpid());
+ 
+-    execl(NP_SCRIPT, NP_SCRIPT, ifname, action, NULL);
++    execl(script_file, script_file, ifname, action, NULL);
+ 
+-    do_log(LOG_ERR, NP_SCRIPT ": %m");
++    do_log(LOG_ERR, "%s: %m", script_file);
+     exit(1);
+ }
+ 
+diff --git a/main.c b/main.c
+index fe949a9..a3cdf63 100644
+--- a/main.c
++++ b/main.c
+@@ -91,7 +91,7 @@ handle_interface(struct nlmsghdr *hdr, void *arg)
+ static void
+ usage(char *progname, int exitcode)
+ {
+-    fprintf(stderr, "Usage: %s [-DFP] [-c config-file] [-i interface] [-p pid-file]\n",
++    fprintf(stderr, "Usage: %s [-DFP] [-c config-file] [-s script-file] [-i interface] [-p pid-file]\n",
+             progname);
+ 
+     fprintf(stderr, "\t-D\t\t"
+@@ -102,6 +102,8 @@ usage(char *progname, int exitcode)
+             "do not autoprobe for interfaces (use with care)\n");
+     fprintf(stderr, "\t-c config_file\t"
+             "read interface patterns from this config file\n");
++    fprintf(stderr, "\t-s script_file\t"
++            "script file for probing interfaces, bringing them up or down\n");
+     fprintf(stderr, "\t-i interface\t"
+             "only handle interfaces matching this pattern\n");
+     fprintf(stderr, "\t-p pid_file\t"
+@@ -219,7 +221,7 @@ main(int argc, char *argv[])
+     int probe = 1;
+     int c;
+ 
+-    while ((c = getopt(argc, argv, "DFPc:hi:p:")) != EOF) {
++    while ((c = getopt(argc, argv, "DFPc:s:hi:p:")) != EOF) {
+         switch (c) {
+         case 'D':
+             debug = 1;
+@@ -234,6 +236,9 @@ main(int argc, char *argv[])
+             read_config(optarg);
+             cfg_read = 1;
+             break;
++        case 's':
++            script_file = optarg;
++            break;
+         case 'h':
+             fprintf(stderr, "netplugd version %s\n", NP_VERSION);
+             usage(argv[0], 0);
+diff --git a/man/man8/netplugd.8 b/man/man8/netplugd.8
+index 1b5ee93..fde1d2a 100644
+--- a/man/man8/netplugd.8
++++ b/man/man8/netplugd.8
+@@ -19,6 +19,7 @@
+ .Nm netplugd
+ .Op Fl FP
+ .Op Fl c Ar config_file
++.Op Fl s Ar script_file
+ .Op Fl i Ar interface_pattern
+ .Op Fl p Ar pid_file
+ .\"
+@@ -117,6 +118,9 @@ to try to read from any real config files, you can specify
+ .Pa /dev/null
+ as a config file.
+ .\"
++.It Fl s Ar script_file
++Specify an alternative script file path, override /etc/netplug.d/netplug
++.\"
+ .It Fl i Ar interface_pattern
+ Specify a pattern that will be used to match interface names that
+ .Nm
+diff --git a/netplug.h b/netplug.h
+index 5e5fb65..1f041ca 100644
+--- a/netplug.h
++++ b/netplug.h
+@@ -26,8 +26,6 @@
+ #include <linux/netlink.h>
+ #include <linux/rtnetlink.h>
+ 
+-#define NP_SCRIPT NP_SCRIPT_DIR "/netplug"
+-
+ /* configuration */
+ 
+ void read_config(char *filename);
+@@ -37,6 +35,8 @@ int try_probe(char *iface);
+ void probe_interfaces(void);
+ void close_on_exec(int fd);
+ 
++extern const char *script_file;
++
+ extern int debug;
+ 
+ /* netlink interfacing */

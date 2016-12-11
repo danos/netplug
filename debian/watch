@@ -1,0 +1,5 @@
+# Compulsory line, this is a version 3 file
+version=3
+
+# Uncomment to examine a Webserver directory
+http://www.red-bean.com/~bos/netplug/netplug-(.*)\.tar\.bz2

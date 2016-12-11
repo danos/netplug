@@ -1,0 +1,12 @@
+Fix Debian specific path to init script in manual page. (Bug #513032)
+--- netplug-1.2.9.1.orig/man/man8/netplugd.8
++++ netplug-1.2.9.1/man/man8/netplugd.8
+@@ -165,7 +165,7 @@
+ events.  The command is run synchronously; it must exit with status
+ code 0 if it succeeds, otherwise with a non-zero exit code or signal.
+ .El
+-.It Pa /etc/rc.d/init.d/netplugd
++.It Pa /etc/init.d/netplug
+ The
+ .Xr init 8
+ script that starts, stops, and displays status of the

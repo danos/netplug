@@ -1,0 +1,127 @@
+netplug (1.2.9.2-3) unstable; urgency=low
+
+  * Set Architecture to linux-any
+  * Depends on lsb-base (>= 3.2-14)
+  * Fix standard version
+  * Use debhelper 9 with hardening=+all
+  * Fix spelling in changelog
+  * Update to deb5 copyright format
+
+ -- Pali Rohár <pali.rohar@gmail.com>  Sun, 11 Dec 2016 02:11:31 +0100
+
+netplug (1.2.9.2-2) unstable; urgency=low
+
+  * debian/control:
+    - New maintainer (Closes: #730573)
+    - Depend on iproute2 instead of transitional iproute (Closes: #753747)
+    - Add info about difference between netplugd and ifplugd packages
+      to package long description (Closes: #690129)
+    - Fix Standards-Version
+  * debian/rules:
+    - Fix missing recommended target
+    - Fix dpkg-buildflags missing
+  * Handle ST_DOWNANDOUT state (Closes: #652418)
+  * Allow one to specify custom script file via new param '-s' (Closes: #702495)
+
+ -- Pali Rohár <pali.rohar@gmail.com>  Sat, 29 Nov 2014 00:34:05 +0100
+
+netplug (1.2.9.2-1) unstable; urgency=low
+
+  * New upstream version:
+    - Fixes FTBFS caused by -Werror and ignored return value (Closes: #559924)
+  * debian/init.d:
+    - Drop "set -e" and add --oknodo to fix restart (Closes: #589617)
+    - Use LSB log_* functions.
+    - Drop /usr/local and /usr from PATH.
+  * debian/control:
+    - Switch to 3.0 quilt format.
+    - Update to Standards-Version: 3.9.1: no changes.
+    - Add misc:Depends
+  * debian/rules: Fix quoting of $$.
+  * main.c: Fix log spamming (Closes: #569226)
+
+ -- Philipp Matthias Hahn <pmhahn@debian.org>  Sat, 07 Aug 2010 13:58:21 +0200
+
+netplug (1.2.9.1-2) unstable; urgency=low
+
+  * main.c: Make "Logs all ignored events" LOG_DEBUG (Closes: #544069)
+  * debian/init.d:
+    - use --name instead of --exec to fix "initscript: stop action does not
+      work" (Closes: #531087)
+    - change LSBInitScript dependencies.
+  * Update debian/control: Standards-Version: 3.8.3: no changes.
+
+ -- Philipp Matthias Hahn <pmhahn@debian.org>  Wed, 07 Oct 2009 08:43:55 +0200
+
+netplug (1.2.9.1-1) unstable; urgency=low
+
+  * New upstream version.
+    - includes socketlen_t fix.
+
+ -- Philipp Matthias Hahn <pmhahn@debian.org>  Tue, 07 Apr 2009 08:45:41 +0200
+
+netplug (1.2.9-3) unstable; urgency=low
+
+  * debian/control: Fix description (Closes: #513031)
+  * man/man8/netplugd.8: Fix path to init.d (Closes: #513032)
+  * Update debian/control:
+    - Standards-Version: 3.8.1
+    - Use debhelper v7 (+ debian/compat)
+  * debian/copyright: Change link from GPL to GPL-2
+  * debian/rules: s/dh_clean -k/dh_prep/
+
+ -- Philipp Matthias Hahn <pmhahn@debian.org>  Tue, 07 Apr 2009 00:16:04 +0200
+
+netplug (1.2.9-2) unstable; urgency=low
+
+  * Improve rejected debian/copyright.
+
+ -- Philipp Matthias Hahn <pmhahn@debian.org>  Tue, 09 Sep 2008 21:47:19 +0200
+
+netplug (1.2.9-1) unstable; urgency=low
+
+  * New upstream version.
+    - includes PID-file fix.
+  * Update debian/control:
+    - Standards-Version: 3.8.0
+    - Homepage-field
+    - Compare to ifplugd in Description
+  * Update debian/init.d:
+    - Add init-info for dependency-based booting
+  * Add debian/watch
+
+ -- Philipp Matthias Hahn <pmhahn@debian.org>  Wed, 30 Jul 2008 18:31:51 +0200
+
+netplug (1.2.7-2) unstable; urgency=low
+
+  * main.c: Write PID-file after damon()izing.
+
+ -- Philipp Matthias Hahn <pmhahn@debian.org>  Fri,  7 Jan 2005 10:08:11 +0100
+
+netplug (1.2.7-1) unstable; urgency=low
+
+  * New upstream version.
+  * debian/init.d: Fix pid-file handling.
+  * debian/control: Add Homepage-location to description.
+
+ -- Philipp Matthias Hahn <pmhahn@debian.org>  Fri, 13 Aug 2004 09:31:41 +0200
+
+netplug (1.2-2) unstable; urgency=low
+
+  * Fix name of netplugd in init.d script.
+
+ -- Philipp Matthias Hahn <pmhahn@debian.org>  Sun,  4 Jul 2004 20:05:59 +0200
+
+netplug (1.2-1) unstable; urgency=low
+
+  * New upstream version.
+  * Update download location.
+
+ -- Philipp Matthias Hahn <pmhahn@debian.org>  Thu, 25 Sep 2003 19:58:22 +0200
+
+netplug (1.0-1) unstable; urgency=low
+
+  * Initial Release.
+
+ -- Philipp Matthias Hahn <pmhahn@debian.org>  Mon,  1 Sep 2003 22:22:43 +0200
+
