@@ -1,0 +1,27 @@
+From: Vyatta Package Maintainers <DL-vyatta-help@att.com>
+Date: Mon, 21 Oct 2019 18:17:56 +0100
+Subject: Check if IFF_RUNNING changed before killing a running script
+
+---
+ if_info.c | 8 +++++---
+ 1 file changed, 5 insertions(+), 3 deletions(-)
+
+diff --git a/if_info.c b/if_info.c
+index e165687..321d2a3 100644
+--- a/if_info.c
++++ b/if_info.c
+@@ -223,9 +223,11 @@ ifsm_flagchange(struct if_info *info, unsigned int newflags)
+                 /* All other states: kill off any scripts currently
+                    running, and go into the PROBING state, attempting
+                    to bring it up */
+-                kill_script(info->worker);
+-                info->state = ST_PROBING;
+-                info->worker = run_netplug_bg(info->name, "probe");
++                if (!(changed & IFF_RUNNING)) {
++                    kill_script(info->worker);
++                    info->state = ST_PROBING;
++                    info->worker = run_netplug_bg(info->name, "probe");
++                }
+             }
+         }
+     }

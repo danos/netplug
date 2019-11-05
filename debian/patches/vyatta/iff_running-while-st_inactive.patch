@@ -1,0 +1,50 @@
+From: "Charles (Chas) Williams" <ciwillia@vyatta.att-mail.com>
+Date: Mon, 21 Oct 2019 18:15:42 +0100
+Subject: Handle !IFF_RUNNING while ST_INACTIVE
+
+netplugd can potentially experience the following transition:
+
+    state OUTING flags 0x00011843 UP,BROADCAST,RUNNING,SLAVE,MULTICAST,10000 -> 0x00001002 BROADCAST,MULTICAST
+    state DOWNANDOUT flags 0x00001002 BROADCAST,MULTICAST -> 0x00001042 BROADCAST,RUNNING,MULTICAST
+    state DOWNANDOUT flags 0x00001042 BROADCAST,RUNNING,MULTICAST -> 0x00011043 UP,BROADCAST,RUNNING,MULTICAST,10000
+    state INACTIVE flags 0x00011043 UP,BROADCAST,RUNNING,MULTICAST,10000 -> 0x00011003 UP,BROADCAST,MULTICAST,10000
+
+Note that the IFF_UP and IFF_RUNNING were split and we went to
+ST_INACTIVE.  A more typical sequence looks like:
+
+    state OUTING flags 0x00011843 UP,BROADCAST,RUNNING,SLAVE,MULTICAST,10000 -> 0x00001002 BROADCAST,MULTICAST
+    state DOWNANDOUT flags 0x00001002 BROADCAST,MULTICAST -> 0x00011043 UP,BROADCAST,RUNNING,MULTICAST,10000
+    state INNING flags 0x00011043 UP,BROADCAST,RUNNING,MULTICAST,10000 -> 0x00011003 UP,BROADCAST,MULTICAST,10000
+
+Note that IFF_UP and _IFF_RUNNING happened in the same event and we
+correctly transitioned to INNING.
+
+To fix this, "fake" IFF_RUNNING when we get an IFF_UP while IFF_RUNNING
+is already set during DOWNANDOUT.  This make ST_INACTIVE fall through
+to ST_INNING.
+---
+ if_info.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/if_info.c b/if_info.c
+index 097b74c..9039765 100644
+--- a/if_info.c
++++ b/if_info.c
+@@ -192,6 +192,9 @@ ifsm_flagchange(struct if_info *info, unsigned int newflags)
+                     kill_script(info->worker);
+                     info->worker = -1;
+                 }
++                /* IFF_RUNNING might precede IFF_UP */
++                if (info->flags & IFF_RUNNING)
++                    changed |= IFF_RUNNING;
+                 info->state = ST_INACTIVE;
+                 break;
+ 
+@@ -240,7 +243,6 @@ ifsm_flagchange(struct if_info *info, unsigned int newflags)
+     if (changed & IFF_RUNNING) {
+         switch(info->state) {
+         case ST_INACTIVE:
+-            assert(!(info->flags & IFF_RUNNING));
+             assert(info->worker == -1);
+ 
+             info->worker = run_netplug_bg(info->name, "in", NULL);

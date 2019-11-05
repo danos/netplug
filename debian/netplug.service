@@ -1,0 +1,10 @@
+[Unit]
+Description=Network cable hotplug management daemon
+After=network.target
+
+[Service]
+ExecStart=/sbin/netplugd -P -F
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

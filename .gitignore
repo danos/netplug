@@ -1,0 +1,8 @@
+.pc
+*.o
+netplugd
+debian/*.log
+debian/*.debhelper
+debian/*.substvars
+debian/netplug
+debian/files

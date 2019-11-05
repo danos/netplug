@@ -1,0 +1,28 @@
+From: Vyatta Package Maintainers <DL-vyatta-help@att.com>
+Date: Mon, 21 Oct 2019 18:15:42 +0100
+Subject: Receiving netlink IFF_RUNNING while in DOWNANDOUT state causes
+ netplugd to exit
+
+This has been partially fixed upstream by Debian.
+The additional fix handles OUTING state as well as ensuring that any running
+scripts are cancelled.
+---
+ if_info.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/if_info.c b/if_info.c
+index 2af2a67..097b74c 100644
+--- a/if_info.c
++++ b/if_info.c
+@@ -187,6 +187,11 @@ ifsm_flagchange(struct if_info *info, unsigned int newflags)
+             switch(info->state) {
+             case ST_DOWN:
+             case ST_DOWNANDOUT:
++            case ST_OUTING:
++                if (info->worker != -1) {
++                    kill_script(info->worker);
++                    info->worker = -1;
++                }
+                 info->state = ST_INACTIVE;
+                 break;
+ 

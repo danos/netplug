@@ -1,0 +1,42 @@
+From: Shweta Choudaha <shweta.choudaha@att.com>
+Date: Mon, 21 Oct 2019 18:15:42 +0100
+Subject: Run scripts when mac address changes
+
+Extend netplug to run scripts when mac address changes.
+
+Signed-off-by: Shweta Choudaha <shweta.choudaha@att.com>
+---
+ if_info.c | 9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/if_info.c b/if_info.c
+index f01b5be..e9afa3c 100644
+--- a/if_info.c
++++ b/if_info.c
+@@ -491,19 +491,24 @@ if_info_update_interface(struct nlmsghdr *hdr, struct rtattr *attrs[])
+     i->type = info->ifi_type;
+     i->flags = info->ifi_flags;
+ 
++    strcpy(i->name, RTA_DATA(attrs[IFLA_IFNAME]));
++
+     if (attrs[IFLA_ADDRESS]) {
+         int alen;
+         i->addr_len = alen = RTA_PAYLOAD(attrs[IFLA_ADDRESS]);
+         if (alen > sizeof(i->addr))
+             alen = sizeof(i->addr);
++        if (memcmp(i->addr, RTA_DATA(attrs[IFLA_ADDRESS]), alen)) {
++            do_log(LOG_DEBUG, "Mac address on interface %s changed", i->name);
++            /* Run scripts on mac address change */
++            (void)run_netplug_bg(i->name, "macchange", NULL, NULL, NULL);
++        }
+         memcpy(i->addr, RTA_DATA(attrs[IFLA_ADDRESS]), alen);
+     } else {
+         i->addr_len = 0;
+         memset(i->addr, 0, sizeof(i->addr));
+     }
+ 
+-    strcpy(i->name, RTA_DATA(attrs[IFLA_IFNAME]));
+-
+     return i;
+ }
+ 

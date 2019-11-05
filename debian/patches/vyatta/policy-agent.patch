@@ -1,0 +1,97 @@
+From: Vyatta Package Maintainers <DL-vyatta-help@att.com>
+Date: Tue, 22 Oct 2019 12:55:41 +0100
+Subject: Vyatta policy agent
+
+Update the "netplug" policy agent with the actions required by Vyatta.
+---
+ etc/netplugd.conf |  6 ++++++
+ scripts/netplug   | 46 +++++++++++++++++++++++++---------------------
+ 2 files changed, 31 insertions(+), 21 deletions(-)
+
+diff --git a/etc/netplugd.conf b/etc/netplugd.conf
+index 592a9a8..34a49fe 100644
+--- a/etc/netplugd.conf
++++ b/etc/netplugd.conf
+@@ -1 +1,7 @@
+ eth*
++dp*
++br*
++bond*
++lo*
++sw*
++.spathintf
+diff --git a/scripts/netplug b/scripts/netplug
+index 82c1a43..6ceb36b 100755
+--- a/scripts/netplug
++++ b/scripts/netplug
+@@ -1,7 +1,9 @@
+ #!/bin/sh
+ #
+-# netplug - policy agent for netplugd
++# netplugd policy agent for Vyatta
+ #
++# Copyright (c) 2019, AT&T Intellectual Property
++# Copyright (c) 2014-2017 Brocade Communications Systems, Inc.
+ # Copyright 2003 Key Research, Inc.
+ #
+ # This program is free software; you can redistribute it and/or modify
+@@ -15,37 +17,39 @@
+ # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ # General Public License for more details.
+ 
+-
+-PATH=/usr/bin:/bin:/usr/sbin:/sbin
+-export PATH
+-
+ dev="$1"
+ action="$2"
++proto="$3"
++addr="$4"
+ 
+ case "$action" in
+ in)
+-    if [ -x /sbin/ifup ]; then
+-	exec /sbin/ifup "$dev"
+-    else
+-	echo "Please teach me how to plug in an interface!" 1>&2
+-	exit 1
+-    fi
++   run-parts -a $dev /etc/netplug/linkup.d
+     ;;
+ out)
+-    if [ -x /sbin/ifdown ]; then
+-	# At least on Fedora Core 1, the call to ip addr flush infloops
+-	# /sbin/ifdown $dev && exec /sbin/ip addr flush $dev
+-	exec /sbin/ifdown "$dev"
+-    else
+-	echo "Please teach me how to unplug an interface!" 1>&2
+-	exit 1
+-    fi
++   run-parts -a $dev /etc/netplug/linkdown.d
+     ;;
++macchange)
++   run-parts -a $dev /etc/netplug/macchange.d
++    ;;
++
++# probe loads and initialises the driver for the interface and brings the
++# interface into the "up" state, so that it can generate netlink(7) events.
++# This interferes with "admin down" for an interface. Thus, the probe action
++# is empty. An "admin up" is treated as a "link up" and thus, "link up"
++# action is executed.  To execute "link down" action on "admin down",
++# run appropriate script in /etc/netplug/linkdown.d
+ probe)
+-    exec /sbin/ip link set "$dev" up >/dev/null 2>&1
++    ;;
++
++newaddr)
++   run-parts -a $dev -a $proto -a $addr /etc/netplug/newaddr.d
++    ;;
++
++deladdr)
++   run-parts -a $dev -a $proto -a $addr /etc/netplug/deladdr.d
+     ;;
+ *)
+-    echo "I have been called with a funny action of '%s'!" 1>&2
+     exit 1
+     ;;
+ esac

@@ -1,0 +1,391 @@
+From: Daniel Gollub <dgollub@vyatta.att-mail.com>
+Date: Mon, 21 Oct 2019 18:15:42 +0100
+Subject: Trigger events for RTM_NEWADDR and RTM_DELADDR.
+
+---
+ if_info.c | 48 +++++++++++++++++++++++++++++++--------
+ lib.c     | 39 ++++++++++++++++++++++++++++----
+ main.c    | 78 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++-
+ netlink.c | 18 +++++++++++++--
+ netplug.h |  7 ++++--
+ 5 files changed, 171 insertions(+), 19 deletions(-)
+
+diff --git a/if_info.c b/if_info.c
+index 321d2a3..2af2a67 100644
+--- a/if_info.c
++++ b/if_info.c
+@@ -120,11 +120,11 @@ ifsm_flagpoll(struct if_info *info)
+     case ST_INACTIVE:
+         if (!(info->flags & IFF_UP)) {
+             assert(info->worker == -1);
+-            info->worker = run_netplug_bg(info->name, "probe");
++            info->worker = run_netplug_bg(info->name, "probe", NULL);
+             info->state = ST_PROBING;
+         } else if (info->flags & IFF_RUNNING) {
+             assert(info->worker == -1);
+-            info->worker = run_netplug_bg(info->name, "in");
++            info->worker = run_netplug_bg(info->name, "in", NULL);
+             info->state = ST_INNING;
+         }
+         break;
+@@ -143,7 +143,7 @@ ifsm_flagpoll(struct if_info *info)
+     case ST_ACTIVE:
+         if (!(info->flags & IFF_RUNNING)) {
+             assert(info->worker == -1);
+-            info->worker = run_netplug_bg(info->name, "out");
++            info->worker = run_netplug_bg(info->name, "out", NULL);
+             info->state = ST_OUTING;
+         }
+         break;
+@@ -226,7 +226,7 @@ ifsm_flagchange(struct if_info *info, unsigned int newflags)
+                 if (!(changed & IFF_RUNNING)) {
+                     kill_script(info->worker);
+                     info->state = ST_PROBING;
+-                    info->worker = run_netplug_bg(info->name, "probe");
++                    info->worker = run_netplug_bg(info->name, "probe", NULL);
+                 }
+             }
+         }
+@@ -238,7 +238,7 @@ ifsm_flagchange(struct if_info *info, unsigned int newflags)
+             assert(!(info->flags & IFF_RUNNING));
+             assert(info->worker == -1);
+ 
+-            info->worker = run_netplug_bg(info->name, "in");
++            info->worker = run_netplug_bg(info->name, "in", NULL);
+             info->state = ST_INNING;
+             break;
+ 
+@@ -255,7 +255,7 @@ ifsm_flagchange(struct if_info *info, unsigned int newflags)
+             assert(info->flags & IFF_RUNNING);
+             assert(info->worker == -1);
+ 
+-            info->worker = run_netplug_bg(info->name, "out");
++            info->worker = run_netplug_bg(info->name, "out", NULL);
+             info->state = ST_OUTING;
+             break;
+ 
+@@ -306,7 +306,13 @@ void ifsm_scriptdone(pid_t pid, int exitstatus)
+     for_each_iface(find_pid);
+ 
+     if (info == NULL) {
+-        do_log(LOG_INFO, "Unexpected child %d exited with status %d",
++	/*
++	 * Most probably this child have been one kicked off to handle
++	 * an address add or remove operation in which case it doesn't
++	 * affect the main FSM which currently only handles interface
++	 * up/down/probe events.
++	 */
++        do_log(LOG_DEBUG, "Unawaited child %d exited with status %d",
+                pid, exitstatus);
+         return;
+     }
+@@ -339,7 +345,7 @@ void ifsm_scriptdone(pid_t pid, int exitstatus)
+            probe script for this interface */
+         info->state = ST_PROBING;
+         assert(info->worker == -1);
+-        info->worker = run_netplug_bg(info->name, "probe");
++        info->worker = run_netplug_bg(info->name, "probe", NULL);
+         break;
+ 
+     case ST_INNING:
+@@ -357,7 +363,7 @@ void ifsm_scriptdone(pid_t pid, int exitstatus)
+     case ST_WAIT_IN:
+         assert(info->worker == -1);
+ 
+-        info->worker = run_netplug_bg(info->name, "out");
++        info->worker = run_netplug_bg(info->name, "out", NULL);
+         info->state = ST_OUTING;
+         break;
+ 
+@@ -399,6 +405,30 @@ int if_info_save_interface(struct nlmsghdr *hdr, void *arg)
+     return if_info_update_interface(hdr, attrs) ? 0 : -1;
+ }
+ 
++struct if_info *
++if_addr_get_interface(struct nlmsghdr *hdr, struct rtattr *attrs[])
++{
++    if (hdr->nlmsg_type != RTM_NEWADDR && hdr->nlmsg_type != RTM_DELADDR) {
++        return NULL;
++    }
++
++    struct ifaddrmsg *ifa = NLMSG_DATA(hdr);
++
++    if (hdr->nlmsg_len < NLMSG_LENGTH(sizeof(ifa))) {
++        return NULL;
++    }
++
++    int x = ifa->ifa_index & (INFOHASHSZ-1);
++    struct if_info *i, **ip;
++
++    for (ip = &if_info[x]; (i = *ip) != NULL; ip = &i->next) {
++        if (i->index == ifa->ifa_index) {
++            break;
++        }
++    }
++
++    return i;
++}
+ 
+ struct if_info *
+ if_info_get_interface(struct nlmsghdr *hdr, struct rtattr *attrs[])
+diff --git a/lib.c b/lib.c
+index 46de348..661d932 100644
+--- a/lib.c
++++ b/lib.c
+@@ -26,6 +26,7 @@
+ #include <sys/wait.h>
+ #include <syslog.h>
+ #include <unistd.h>
++#include <string.h>
+ 
+ #include "netplug.h"
+ 
+@@ -93,11 +94,21 @@ close_on_exec(int fd)
+     }
+ }
+ 
++#define MAX_PARAMS 32
++#define MAX_PARAMS_LENGTH 256
+ 
+ pid_t
+-run_netplug_bg(char *ifname, char *action)
++run_netplug_bg(char *param, ...)
+ {
+     pid_t pid;
++    int argc = 1;
++    char *argv[MAX_PARAMS+1];
++    const char *arg;
++    va_list ap;
++    char params[MAX_PARAMS_LENGTH];
++    int i;
++
++    assert(param);
+ 
+     if ((pid = fork()) == -1) {
+         do_log(LOG_ERR, "fork: %m");
+@@ -109,10 +120,28 @@ run_netplug_bg(char *ifname, char *action)
+ 
+     setpgrp();                  /* become group leader */
+ 
+-    do_log(LOG_INFO, "%s %s %s -> pid %d",
+-           script_file, ifname, action, getpid());
++    va_start(ap, param);
++    argv[0] = script_file;
++    argv[argc++] = param;
++    while (argc < MAX_PARAMS) {
++	    arg = argv[argc++] = va_arg(ap, char *);
++	    if (!arg)
++		    break;
++    }
++    va_end(ap);
++    argv[argc] = NULL;
++
++    strncpy(params, param, MAX_PARAMS_LENGTH);
++    va_start(ap, param);
++    for (i=2; i < argc-1 && argv[i] != NULL; i++) {
++	    strncat(params, " ", MAX_PARAMS_LENGTH);
++	    strncat(params, argv[i], MAX_PARAMS_LENGTH);
++    }
++    va_end(ap);
++
++    do_log(LOG_INFO, "%s %s -> pid %d", script_file, params, getpid());
+ 
+-    execl(script_file, script_file, ifname, action, NULL);
++    execvp(script_file, argv);
+ 
+     do_log(LOG_ERR, "%s: %m", script_file);
+     exit(1);
+@@ -122,7 +151,7 @@ run_netplug_bg(char *ifname, char *action)
+ int
+ run_netplug(char *ifname, char *action)
+ {
+-    pid_t pid = run_netplug_bg(ifname, action);
++    pid_t pid = run_netplug_bg(ifname, action, NULL);
+     int status, ret;
+ 
+     if ((ret = waitpid(pid, &status, 0)) == -1) {
+diff --git a/main.c b/main.c
+index 10abea2..d20eeb2 100644
+--- a/main.c
++++ b/main.c
+@@ -33,6 +33,7 @@
+ #include <errno.h>
+ #include <string.h>
+ #include <sys/ioctl.h>
++#include <arpa/inet.h>
+ 
+ #include "netplug.h"
+ 
+@@ -40,6 +41,81 @@
+ int use_syslog;
+ static char *pid_file;
+ 
++char *
++family2str(struct ifaddrmsg *info)
++{
++   switch (info->ifa_family) {
++         case AF_INET:
++              return "inet";
++         case AF_INET6:
++              return "inet6";
++         default:
++              return "unknown";
++   }
++}
++
++char *
++hdrtype2str(struct nlmsghdr *hdr)
++{
++   switch (hdr->nlmsg_type) {
++          case RTM_NEWADDR:
++              return "newaddr";
++          case RTM_DELADDR:
++              return "deladdr";
++         default:
++              return "unknown";
++   }
++}
++
++static int
++handle_ifaddr(struct nlmsghdr *hdr, void *arg)
++{
++    if (hdr->nlmsg_type != RTM_NEWADDR && hdr->nlmsg_type != RTM_DELADDR)
++        return 0;
++
++    struct ifaddrmsg *ifa = NLMSG_DATA(hdr);
++    int len = hdr->nlmsg_len - NLMSG_LENGTH(sizeof(*ifa));
++
++    if (len < 0) {
++        do_log(LOG_ERR, "Malformed netlink interface address packet length");
++        return -1;
++    }
++
++    struct rtattr *attrs[IFA_MAX + 1];
++
++    parse_rtattrs(attrs, IFA_MAX, IFA_RTA(ifa), len);
++
++    struct if_info *i = if_addr_get_interface(hdr, attrs);
++    if (!i) {
++       do_log(LOG_DEBUG, "No ifi for index: %d\n", ifa->ifa_index);
++       return 0;
++    }
++
++    if (!if_match(i->name)) {
++        do_log(LOG_DEBUG, "%s: ignoring event", i->name);
++        return 0;
++    }
++
++    char addrbuf[256];
++
++    struct rtattr *ifaddr = attrs[IFA_LOCAL] ? attrs[IFA_LOCAL] : attrs[IFA_ADDRESS];
++    const char *addr = NULL;
++    if (!ifaddr) {
++        do_log(LOG_DEBUG, "%s: not addresse set", i->name);
++
++    } else {
++        addr = inet_ntop(ifa->ifa_family, RTA_DATA(ifaddr),
++                                 addrbuf, sizeof(addrbuf));
++    }
++
++    if (addr) {
++        (void)run_netplug_bg(i->name, hdrtype2str(hdr), family2str(ifa),
++			 addr, NULL);
++    }
++
++    return 0;
++}
++
+ static int
+ handle_interface(struct nlmsghdr *hdr, void *arg)
+ {
+@@ -384,7 +460,7 @@ main(int argc, char *argv[])
+ 
+         if (fds[0].revents & POLLIN) {
+             /* interface flag state change */
+-            if (netlink_listen(fd, handle_interface, NULL) == 0)
++            if (netlink_listen(fd, handle_interface, handle_ifaddr, NULL) == 0)
+                 break;          /* done */
+         }
+ 
+diff --git a/netlink.c b/netlink.c
+index 2b47e96..df9c8dd 100644
+--- a/netlink.c
++++ b/netlink.c
+@@ -114,7 +114,7 @@ receive(int fd, struct msghdr *msg, int *status)
+  * !0 - we have a valid event
+  */
+ int
+-netlink_listen(int fd, netlink_callback callback, void *arg)
++netlink_listen(int fd, netlink_callback if_callback, netlink_callback addr_callback, void *arg)
+ {
+     char   buf[8192];
+     struct iovec iov = { buf, sizeof(buf) };
+@@ -147,6 +147,7 @@ netlink_listen(int fd, netlink_callback callback, void *arg)
+ 	}
+ 
+         struct nlmsghdr *hdr;
++        netlink_callback callback = NULL;
+ 
+         for (hdr = (struct nlmsghdr*) buf; status >= sizeof(*hdr); ) {
+             int len = hdr->nlmsg_len;
+@@ -161,6 +162,19 @@ netlink_listen(int fd, netlink_callback callback, void *arg)
+                 return 1;
+             }
+ 
++            switch (hdr->nlmsg_type) {
++                case RTM_DELLINK:
++                case RTM_NEWLINK:
++                    callback = if_callback;
++                    break;
++                case RTM_NEWADDR:
++                case RTM_DELADDR:
++                    callback = addr_callback;
++                    break;
++                default:
++                    break;
++            }
++
+             if (callback) {
+                 int err;
+ 
+@@ -277,7 +291,7 @@ netlink_open(void)
+ 
+     memset(&addr, 0, sizeof(addr));
+     addr.nl_family = AF_NETLINK;
+-    addr.nl_groups = RTMGRP_LINK;
++    addr.nl_groups = RTMGRP_LINK|RTMGRP_IPV4_IFADDR|RTMGRP_IPV6_IFADDR;
+ 
+     if (bind(fd, (struct sockaddr *) &addr, sizeof(addr)) == -1) {
+         do_log(LOG_ERR, "Could not bind netlink socket: %m");
+diff --git a/netplug.h b/netplug.h
+index 5f0d2e6..1677218 100644
+--- a/netplug.h
++++ b/netplug.h
+@@ -46,7 +46,7 @@ typedef int (*netlink_callback)(struct nlmsghdr *hdr, void *arg);
+ int netlink_open(void);
+ void netlink_request_dump(int fd);
+ void netlink_receive_dump(int fd, netlink_callback callback, void *arg);
+-int  netlink_listen(int fd, netlink_callback callback, void *arg);
++int  netlink_listen(int fd, netlink_callback if_callback, netlink_callback addr_callback, void *arg);
+ 
+ 
+ /* network interface info management */
+@@ -77,6 +77,9 @@ struct if_info {
+     time_t      lastchange;     /* timestamp of last state change */
+ };
+ 
++struct if_info *if_addr_get_interface(struct nlmsghdr *hdr,
++                                      struct rtattr *attrs[]);
++
+ struct if_info *if_info_get_interface(struct nlmsghdr *hdr,
+                                       struct rtattr *attrs[]);
+ void if_info_delete_interface(struct nlmsghdr *hdr);
+@@ -94,7 +97,7 @@ void ifsm_scriptdone(pid_t pid, int exitstatus);
+ 
+ void do_log(int pri, const char *fmt, ...)
+     __attribute__ ((format (printf, 2, 3)));
+-pid_t run_netplug_bg(char *ifname, char *action);
++pid_t run_netplug_bg(char *param, ...);
+ int run_netplug(char *ifname, char *action);
+ void kill_script(pid_t pid);
+ void *xmalloc(size_t n);

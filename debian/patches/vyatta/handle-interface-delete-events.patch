@@ -1,0 +1,65 @@
+From: Vyatta Package Maintainers <DL-vyatta-help@att.com>
+Date: Mon, 21 Oct 2019 18:17:37 +0100
+Subject: Fix netplug to understand that interfaces get deleted
+
+---
+ if_info.c | 16 ++++++++++++++++
+ main.c    |  5 +++++
+ netplug.h |  1 +
+ 3 files changed, 22 insertions(+)
+
+diff --git a/if_info.c b/if_info.c
+index ca5e4d0..e165687 100644
+--- a/if_info.c
++++ b/if_info.c
+@@ -468,6 +468,22 @@ if_info_update_interface(struct nlmsghdr *hdr, struct rtattr *attrs[])
+     return i;
+ }
+ 
++void if_info_delete_interface(struct nlmsghdr *hdr)
++{
++    struct ifinfomsg *info = NLMSG_DATA(hdr);
++    struct if_info *i, **ip;
++    int x = info->ifi_index & (INFOHASHSZ-1);
++
++    for (ip = &if_info[x]; (i = *ip) != NULL; ip = &i->next) {
++	if (i->index == info->ifi_index)
++	    break;
++    }
++
++    if (i) {
++	*ip = i->next;
++	free(i);
++    }
++}
+ 
+ /*
+  * Local variables:
+diff --git a/main.c b/main.c
+index aa9010e..10abea2 100644
+--- a/main.c
++++ b/main.c
+@@ -59,6 +59,11 @@ handle_interface(struct nlmsghdr *hdr, void *arg)
+         return -1;
+     }
+ 
++    if (hdr->nlmsg_type == RTM_DELLINK) {
++	if_info_delete_interface(hdr);
++	return 0;
++    }
++
+     struct rtattr *attrs[IFLA_MAX + 1];
+ 
+     parse_rtattrs(attrs, IFLA_MAX, IFLA_RTA(info), len);
+diff --git a/netplug.h b/netplug.h
+index 1f041ca..5f0d2e6 100644
+--- a/netplug.h
++++ b/netplug.h
+@@ -79,6 +79,7 @@ struct if_info {
+ 
+ struct if_info *if_info_get_interface(struct nlmsghdr *hdr,
+                                       struct rtattr *attrs[]);
++void if_info_delete_interface(struct nlmsghdr *hdr);
+ struct if_info *if_info_update_interface(struct nlmsghdr *hdr,
+                                          struct rtattr *attrs[]);
+ int if_info_save_interface(struct nlmsghdr *hdr, void *arg);

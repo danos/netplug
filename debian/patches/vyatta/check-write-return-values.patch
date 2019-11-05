@@ -1,0 +1,24 @@
+From: Vyatta Package Maintainers <DL-vyatta-help@att.com>
+Date: Tue, 22 Oct 2019 13:19:17 +0100
+Subject: With hardening, all return values of write() need to be checked.
+
+---
+ main.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/main.c b/main.c
+index b2e2a4e..aa9010e 100644
+--- a/main.c
++++ b/main.c
+@@ -167,9 +167,9 @@ child_handler(int sig, siginfo_t *info, void *v)
+     {
+         s = write(child_handler_pipe[1], &ce, sizeof(ce));
+ 
+-	if (s == -1)
++	if (s != sizeof(ce))
+ 	{
+-	    do_log(LOG_ERR, "can't write into pipe");
++	    do_log(LOG_ERR, "can't write to child pipe: %m");
+ 	    exit(1);
+ 	}
+     }

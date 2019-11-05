@@ -4,3 +4,15 @@
 40callback.patch
 50downoutstate.patch
 60custom-script.patch
+vyatta/tweak-logging-behaviour.patch
+vyatta/check-write-return-values.patch
+vyatta/handle-interface-delete-events.patch
+vyatta/check-iff_running-changed-before-script-kill.patch
+vyatta/handle-netlink-newaddr-deladdr-events.patch
+vyatta/reap-all-children-correctly.patch
+vyatta/downoutstate.patch
+vyatta/iff_running-while-st_inactive.patch
+vyatta/limit-concurrent-processes.patch
+vyatta/netlink-if-mac-change.patch
+vyatta/st_wait-in-up.patch
+vyatta/policy-agent.patch

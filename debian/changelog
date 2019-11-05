@@ -1,3 +1,9 @@
+netplug (1.2.9.2-3vyatta10) unstable; urgency=medium
+
+  * DANOS Import
+
+ -- Vyatta Package Maintainers <DL-vyatta-help@att.com>  Mon, 04 Nov 2019 11:34:48 +0000
+
 netplug (1.2.9.2-3) unstable; urgency=low
 
   * Set Architecture to linux-any

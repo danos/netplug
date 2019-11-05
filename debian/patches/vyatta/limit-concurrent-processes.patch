@@ -1,0 +1,495 @@
+From: George Wilkie <george.wilkie@intl.att.com>
+Date: Mon, 21 Oct 2019 18:15:42 +0100
+Subject: Limit concurrently running background processes
+
+Netplug spawns background processes to react to netlink events.
+For a new interface coming up, there will be at least 3 processes:
+linkup, new ipv4 address, new ipv6 address.
+If many interfaces come up at once, this can mean large numbers
+of processes getting created which can swamp the system, especially
+if they are talking to configd.
+
+Create a queue to hold background process information, and use it
+to run a fixed number of processes at a time. Default is 3 which
+is enough for a single interface, but can be tuned via an
+environment variable according on CPU availability on the system.
+---
+ if_info.c |  30 ++++----
+ lib.c     | 236 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++-----
+ main.c    |   2 +-
+ netplug.h |  13 ++--
+ 4 files changed, 242 insertions(+), 39 deletions(-)
+
+diff --git a/if_info.c b/if_info.c
+index 9039765..f01b5be 100644
+--- a/if_info.c
++++ b/if_info.c
+@@ -119,11 +119,11 @@ ifsm_flagpoll(struct if_info *info)
+         /* FALLTHROUGH */
+     case ST_INACTIVE:
+         if (!(info->flags & IFF_UP)) {
+-            assert(info->worker == -1);
++            assert(info->worker == WORKER_IDLE);
+             info->worker = run_netplug_bg(info->name, "probe", NULL);
+             info->state = ST_PROBING;
+         } else if (info->flags & IFF_RUNNING) {
+-            assert(info->worker == -1);
++            assert(info->worker == WORKER_IDLE);
+             info->worker = run_netplug_bg(info->name, "in", NULL);
+             info->state = ST_INNING;
+         }
+@@ -142,7 +142,7 @@ ifsm_flagpoll(struct if_info *info)
+ 
+     case ST_ACTIVE:
+         if (!(info->flags & IFF_RUNNING)) {
+-            assert(info->worker == -1);
++            assert(info->worker == WORKER_IDLE);
+             info->worker = run_netplug_bg(info->name, "out", NULL);
+             info->state = ST_OUTING;
+         }
+@@ -188,9 +188,9 @@ ifsm_flagchange(struct if_info *info, unsigned int newflags)
+             case ST_DOWN:
+             case ST_DOWNANDOUT:
+             case ST_OUTING:
+-                if (info->worker != -1) {
++                if (info->worker != WORKER_IDLE) {
+                     kill_script(info->worker);
+-                    info->worker = -1;
++                    info->worker = WORKER_IDLE;
+                 }
+                 /* IFF_RUNNING might precede IFF_UP */
+                 if (info->flags & IFF_RUNNING)
+@@ -243,7 +243,7 @@ ifsm_flagchange(struct if_info *info, unsigned int newflags)
+     if (changed & IFF_RUNNING) {
+         switch(info->state) {
+         case ST_INACTIVE:
+-            assert(info->worker == -1);
++            assert(info->worker == WORKER_IDLE);
+ 
+             info->worker = run_netplug_bg(info->name, "in", NULL);
+             info->state = ST_INNING;
+@@ -260,7 +260,7 @@ ifsm_flagchange(struct if_info *info, unsigned int newflags)
+ 
+         case ST_ACTIVE:
+             assert(info->flags & IFF_RUNNING);
+-            assert(info->worker == -1);
++            assert(info->worker == WORKER_IDLE);
+ 
+             info->worker = run_netplug_bg(info->name, "out", NULL);
+             info->state = ST_OUTING;
+@@ -288,14 +288,14 @@ ifsm_flagchange(struct if_info *info, unsigned int newflags)
+         }
+     }
+ 
+-    do_log(LOG_DEBUG, "%s: moved to state %s; worker %d",
++    do_log(LOG_DEBUG, "%s: moved to state %s; worker %ld",
+            info->name, statename(info->state), info->worker);
+     info->flags = newflags;
+     info->lastchange = time(0);
+ }
+ 
+ /* handle a script termination and update the state accordingly */
+-void ifsm_scriptdone(pid_t pid, int exitstatus)
++void ifsm_scriptdone(work_id_t pid, int exitstatus)
+ {
+     int exitok = WIFEXITED(exitstatus) && WEXITSTATUS(exitstatus) == 0;
+     struct if_info *info;
+@@ -319,15 +319,15 @@ void ifsm_scriptdone(pid_t pid, int exitstatus)
+ 	 * affect the main FSM which currently only handles interface
+ 	 * up/down/probe events.
+ 	 */
+-        do_log(LOG_DEBUG, "Unawaited child %d exited with status %d",
++        do_log(LOG_DEBUG, "Unawaited child %ld exited with status %d",
+                pid, exitstatus);
+         return;
+     }
+ 
+-    do_log(LOG_INFO, "%s: state %s pid %d exited status %d",
++    do_log(LOG_INFO, "%s: state %s pid %ld exited status %d",
+            info->name, statename(info->state), pid, exitstatus);
+ 
+-    info->worker = -1;
++    info->worker = WORKER_IDLE;
+ 
+     switch(info->state) {
+     case ST_PROBING:
+@@ -351,7 +351,7 @@ void ifsm_scriptdone(pid_t pid, int exitstatus)
+         /* we were just waiting for the out script to finish - start a
+            probe script for this interface */
+         info->state = ST_PROBING;
+-        assert(info->worker == -1);
++        assert(info->worker == WORKER_IDLE);
+         info->worker = run_netplug_bg(info->name, "probe", NULL);
+         break;
+ 
+@@ -368,7 +368,7 @@ void ifsm_scriptdone(pid_t pid, int exitstatus)
+         break;
+ 
+     case ST_WAIT_IN:
+-        assert(info->worker == -1);
++        assert(info->worker == WORKER_IDLE);
+ 
+         info->worker = run_netplug_bg(info->name, "out", NULL);
+         info->state = ST_OUTING;
+@@ -472,7 +472,7 @@ if_info_get_interface(struct nlmsghdr *hdr, struct rtattr *attrs[])
+         /* initialize state machine fields */
+         i->state = ST_DOWN;
+         i->lastchange = 0;
+-        i->worker = -1;
++        i->worker = WORKER_IDLE;
+     }
+     return i;
+ }
+diff --git a/lib.c b/lib.c
+index 661d932..00aabbe 100644
+--- a/lib.c
++++ b/lib.c
+@@ -32,6 +32,174 @@
+ 
+ const char *script_file = NP_SCRIPT_DIR "/netplug";
+ 
++/*
++ * Queue of background processes to be run.
++ * There are two queues: a pending queue and a running queue.
++ * The pending queue stores entries in creation order.
++ * The running queue has a fixed maximum size and holds the currently running
++ * processes.
++ *
++ * When a background process is required, it is assigned a work id by
++ * incrementing a 64-bit counter.
++ * The process details are added to the tail of the pending queue.
++ * If there is free space in the running queue, the head of the pending
++ * queue is moved to the running queue and the process is created.
++ *
++ * When a running process completes, it is removed from the running queue.
++ * The head of the pending queue (if any) is then run.
++ */
++#include <bsd/sys/queue.h>
++
++#define BG_RUNNING_MAX 3
++
++struct bg_queue {
++    TAILQ_ENTRY(bg_queue) entry;
++    work_id_t id;
++    pid_t pid;    /* 0 pending, >0 running pid */
++    int argc;
++    char **argv;
++};
++
++static work_id_t bg_work_id;
++static int bg_running_max;
++static int bg_running_count;
++static TAILQ_HEAD(bg_pending_head, bg_queue) bg_pending =
++    TAILQ_HEAD_INITIALIZER(bg_pending);
++static TAILQ_HEAD(bg_running_head, bg_queue) bg_running =
++    TAILQ_HEAD_INITIALIZER(bg_running);
++
++static pid_t run_netplug_bg_now(int argc, char **argv);
++
++static void
++bg_queue_init(void)
++{
++    char *s;
++
++    if (bg_running_max)
++        /* Already initialized */
++        return;
++
++    /* How many background tasks can be running concurrently */
++    s = getenv("NETPLUG_BG_RUNNING_MAX");
++    if (s)
++        bg_running_max = atoi(s);
++    else
++        bg_running_max = BG_RUNNING_MAX;
++    if (bg_running_max < 1)
++        bg_running_max = 1;
++}
++
++/* Try to run head of pending queue */
++static void
++bg_queue_run(void)
++{
++    struct bg_queue *bgq;
++
++    if (bg_running_count >= bg_running_max)
++        /* Cannot run any more just now */
++        return;
++
++    bgq = TAILQ_FIRST(&bg_pending);
++    if (bgq == NULL)
++        /* Nothing to run */
++        return;
++
++    /* Remove from pending queue, add to running queue */
++    TAILQ_REMOVE(&bg_pending, bgq, entry);
++    TAILQ_INSERT_TAIL(&bg_running, bgq, entry);
++    bg_running_count++;
++
++    bgq->pid = run_netplug_bg_now(bgq->argc, bgq->argv);
++
++    do_log(LOG_DEBUG, "BGQ: run id %ld with pid %d", bgq->id, bgq->pid);
++}
++
++/* Clean up completed background queue entry */
++static void
++bg_queue_done(struct bg_queue *bgq)
++{
++    do_log(LOG_DEBUG, "BGQ: done id %ld, pid %d", bgq->id, bgq->pid);
++
++    /* Free program arguments */
++    if (bgq->argv) {
++        char **arg;
++
++        for (arg = bgq->argv; *arg; arg++)
++            free(*arg);
++        free(bgq->argv);
++    }
++
++    /* Remove from running or pending queue */
++    if (bgq->pid > 0) {
++        TAILQ_REMOVE(&bg_running, bgq, entry);
++        bg_running_count--;
++    } else
++        TAILQ_REMOVE(&bg_pending, bgq, entry);
++
++    free(bgq);
++
++    /* See if can run another one */
++    bg_queue_run();
++}
++
++/*
++ * Allocate a background process entry and return work id.
++ * It won't have a pid until it gets run.
++ */
++static work_id_t
++bg_queue_start(int argc, char **argv)
++{
++    struct bg_queue *bgq;
++    int i;
++
++    bg_queue_init();
++
++    bgq = calloc(sizeof(*bgq), 1);
++    assert(bgq != NULL);
++    bgq->id = ++bg_work_id;
++    assert(bgq->id > 0);  /* should never wrap */
++
++    /* Take a copy of the program parameters */
++    bgq->argc = argc;
++    bgq->argv = calloc(sizeof(*argv), argc);
++    assert(bgq->argv != NULL);
++    for (i = 0; i < argc && argv[i]; i++) {
++        bgq->argv[i] = strdup(argv[i]);
++        assert(bgq->argv[i] != NULL);
++    }
++
++    /* Add to tail of pending queue */
++    TAILQ_INSERT_TAIL(&bg_pending, bgq, entry);
++
++    do_log(LOG_DEBUG, "BGQ: start id %ld", bgq->id);
++
++    /* See if it can be run now */
++    bg_queue_run();
++
++    return bgq->id;
++}
++
++/* Background script has completed. Return work id & run next in queue */
++work_id_t
++bg_scriptdone(pid_t pid)
++{
++    struct bg_queue *bgq;
++    work_id_t id;
++
++    TAILQ_FOREACH(bgq, &bg_running, entry)
++        if (bgq->pid == pid) {
++            do_log(LOG_DEBUG, "BGQ: reap id %ld with pid %d",
++                   bgq->id, bgq->pid);
++            id = bgq->id;
++            bg_queue_done(bgq);
++            return id;
++        }
++
++    /* Return something that won't match */
++    return WORKER_INVALID;
++}
++
++
+ void
+ do_log(int pri, const char *fmt, ...)
+ {
+@@ -97,29 +265,16 @@ close_on_exec(int fd)
+ #define MAX_PARAMS 32
+ #define MAX_PARAMS_LENGTH 256
+ 
+-pid_t
++work_id_t
+ run_netplug_bg(char *param, ...)
+ {
+-    pid_t pid;
+     int argc = 1;
+     char *argv[MAX_PARAMS+1];
+     const char *arg;
+     va_list ap;
+-    char params[MAX_PARAMS_LENGTH];
+-    int i;
+ 
+     assert(param);
+ 
+-    if ((pid = fork()) == -1) {
+-        do_log(LOG_ERR, "fork: %m");
+-        exit(1);
+-    }
+-    else if (pid != 0) {
+-        return pid;
+-    }
+-
+-    setpgrp();                  /* become group leader */
+-
+     va_start(ap, param);
+     argv[0] = script_file;
+     argv[argc++] = param;
+@@ -131,13 +286,32 @@ run_netplug_bg(char *param, ...)
+     va_end(ap);
+     argv[argc] = NULL;
+ 
++    return bg_queue_start(argc, argv);
++}
++
++static pid_t
++run_netplug_bg_now(int argc, char **argv)
++{
++    pid_t pid;
++    char *param = argv[1];
++    char params[MAX_PARAMS_LENGTH];
++    int i;
++
++    if ((pid = fork()) == -1) {
++        do_log(LOG_ERR, "fork: %m");
++        exit(1);
++    }
++    else if (pid != 0) {
++        return pid;
++    }
++
++    setpgrp();                  /* become group leader */
++
+     strncpy(params, param, MAX_PARAMS_LENGTH);
+-    va_start(ap, param);
+     for (i=2; i < argc-1 && argv[i] != NULL; i++) {
+ 	    strncat(params, " ", MAX_PARAMS_LENGTH);
+ 	    strncat(params, argv[i], MAX_PARAMS_LENGTH);
+     }
+-    va_end(ap);
+ 
+     do_log(LOG_INFO, "%s %s -> pid %d", script_file, params, getpid());
+ 
+@@ -151,7 +325,8 @@ run_netplug_bg(char *param, ...)
+ int
+ run_netplug(char *ifname, char *action)
+ {
+-    pid_t pid = run_netplug_bg(ifname, action, NULL);
++    char *argv[] = {(char *)script_file, ifname, action, NULL};
++    pid_t pid = run_netplug_bg_now(4, argv);
+     int status, ret;
+ 
+     if ((ret = waitpid(pid, &status, 0)) == -1) {
+@@ -169,8 +344,8 @@ run_netplug(char *ifname, char *action)
+    Assumes the pid is actually a leader of a group.  Kills first with
+    SIGTERM at first; if that doesn't work, follow up with a SIGKILL.
+  */
+-void
+-kill_script(pid_t pid)
++static void
++kill_running_script(pid_t pid)
+ {
+     pid_t ret;
+     int status;
+@@ -216,6 +391,29 @@ kill_script(pid_t pid)
+ }
+ 
+ 
++void
++kill_script(work_id_t id)
++{
++    struct bg_queue *bgq;
++
++    TAILQ_FOREACH(bgq, &bg_running, entry)
++        if (bgq->id == id) {
++            do_log(LOG_DEBUG, "BGQ: kill running id %ld, pid %d", id, bgq->pid);
++            kill_running_script(bgq->pid);
++            bg_queue_done(bgq);
++            return;
++        }
++
++    TAILQ_FOREACH(bgq, &bg_pending, entry)
++        if (bgq->id == id) {
++            do_log(LOG_DEBUG, "BGQ: kill pending id %ld", id);
++            bg_queue_done(bgq);
++            return;
++        }
++}
++
++
++
+ void *
+ xmalloc(size_t n)
+ {
+diff --git a/main.c b/main.c
+index eaf59b5..986e500 100644
+--- a/main.c
++++ b/main.c
+@@ -485,7 +485,7 @@ main(int argc, char *argv[])
+                 assert(ret == 0 || ret == -1 || ret == sizeof(ce));
+ 
+                 if (ret == sizeof(ce))
+-                    ifsm_scriptdone(ce.pid, ce.status);
++                    ifsm_scriptdone(bg_scriptdone(ce.pid), ce.status);
+                 else if (ret == -1 && errno != EAGAIN) {
+                     do_log(LOG_ERR, "pipe read failed: %m");
+                     exit(1);
+diff --git a/netplug.h b/netplug.h
+index 1677218..bd60d1f 100644
+--- a/netplug.h
++++ b/netplug.h
+@@ -51,6 +51,10 @@ int  netlink_listen(int fd, netlink_callback if_callback, netlink_callback addr_
+ 
+ /* network interface info management */
+ 
++typedef int64_t work_id_t;
++#define WORKER_IDLE   -1
++#define WORKER_INVALID 0
++
+ struct if_info {
+     struct if_info *next;
+     int index;
+@@ -73,7 +77,7 @@ struct if_info {
+         ST_INSANE,              /* interface seems to be flapping */
+     }           state;
+ 
+-    pid_t       worker;         /* pid of current in/out script */
++    work_id_t   worker;         /* id of current in/out script */
+     time_t      lastchange;     /* timestamp of last state change */
+ };
+ 
+@@ -91,15 +95,16 @@ void for_each_iface(int (*func)(struct if_info *));
+ 
+ void ifsm_flagpoll(struct if_info *info);
+ void ifsm_flagchange(struct if_info *info, unsigned int newflags);
+-void ifsm_scriptdone(pid_t pid, int exitstatus);
++void ifsm_scriptdone(work_id_t id, int exitstatus);
+ 
+ /* utilities */
+ 
+ void do_log(int pri, const char *fmt, ...)
+     __attribute__ ((format (printf, 2, 3)));
+-pid_t run_netplug_bg(char *param, ...);
++work_id_t run_netplug_bg(char *param, ...);
+ int run_netplug(char *ifname, char *action);
+-void kill_script(pid_t pid);
++void kill_script(work_id_t id);
++work_id_t bg_scriptdone(pid_t pid);
+ void *xmalloc(size_t n);
+ 
+ 

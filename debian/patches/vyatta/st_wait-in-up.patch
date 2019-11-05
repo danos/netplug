@@ -1,0 +1,31 @@
+From: Tom Kiely <tkiely@vyatta.att-mail.com>
+Date: Mon, 21 Oct 2019 18:15:42 +0100
+Subject: Prevent netplugd crash due unexpected state
+
+Currently netplugd does not expect to see state SET_WAIT_IN
+when handling the UP flag. However this can frequently occur
+when moving a parent and subinterface from a non-default routing
+instance to the default. The reason appears to be a large number of
+fluctuations of the UP and RUNNING flags in short succession.
+ST_WAIT_IN represents the state of waiting for previously executed
+scripts to complete. When an UP flag is seen, the scripts from a
+previous RUNNING interface state may not be complete while both UP
+and RUNNING have been deasserted and reasserted in the interim.
+---
+ if_info.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/if_info.c b/if_info.c
+index e9afa3c..c2126a9 100644
+--- a/if_info.c
++++ b/if_info.c
+@@ -202,6 +202,9 @@ ifsm_flagchange(struct if_info *info, unsigned int newflags)
+                 info->state = ST_PROBING_UP;
+                 break;
+ 
++            case ST_WAIT_IN:
++                break;
++
+             default:
+                 do_log(LOG_ERR, "%s: unexpected state %s for UP", info->name, statename(info->state));
+                 exit(1);

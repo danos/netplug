@@ -35,7 +35,7 @@ do_start () {
 	start-stop-daemon --start --quiet --pidfile "$PIDFILE" \
 		--exec "$DAEMON" --test >/dev/null || return 1
 	start-stop-daemon --start --quiet --pidfile "$PIDFILE" \
-		--exec "$DAEMON" -- -p "$PIDFILE" >/dev/null || return 2
+		--exec "$DAEMON" -- -P -p "$PIDFILE" >/dev/null || return 2
 }
 
 do_stop () {

@@ -1,0 +1,62 @@
+From: Michael Littlejohn <mlittlej@vyatta.att-mail.com>
+Date: Mon, 21 Oct 2019 18:18:20 +0100
+Subject: Netlink messages are captured by netplugd which may execute a
+ script, or scripts, in response using child processes to do so. When
+ child processes are spawned, the last process spawned is remembered with
+ the expectation that it will complete and will then be reaped without delay.
+
+However, if multiple children are spawned in rapid succession before the
+scheduler returns to netplugd to begin the reaping process, only the last
+process will be reaped. The other children will be left in a Zombie state
+in perpetuity.
+
+These zombie processes fill the process table, strangling system resources
+until eventually netplugd terminates. Upon termination of netplugd it's
+children are adopted by their grand-parent process (init) and are reaped at
+that point. Netplugd does not automatically restart.
+
+This patch adds to netplug a loop which will reap all completed child
+processes (starting with the most recent first, then from oldest to newest)
+returning the system resources and keeping the process table clear.
+---
+ main.c | 20 +++++++++++++++-----
+ 1 file changed, 15 insertions(+), 5 deletions(-)
+
+diff --git a/main.c b/main.c
+index d20eeb2..eaf59b5 100644
+--- a/main.c
++++ b/main.c
+@@ -242,18 +242,28 @@ child_handler(int sig, siginfo_t *info, void *v)
+ 
+     assert(sig == SIGCHLD);
+ 
+-    ce.pid = info->si_pid;
+-    ret = waitpid(info->si_pid, &ce.status, 0);
+-    if (ret == info->si_pid)
++    while((ret = waitpid(-1, &ce.status, WNOHANG)) > 0)
+     {
+-        s = write(child_handler_pipe[1], &ce, sizeof(ce));
++	ce.pid = ret;
+ 
++	s = write(child_handler_pipe[1], &ce, sizeof(ce));
++
++	/* Make sure each write wrote the full byte sequence. */
+ 	if (s != sizeof(ce))
+ 	{
+-	    do_log(LOG_ERR, "can't write to child pipe: %m");
++	    do_log(LOG_ERR, "Failed to write to child pipe. PID: %d, err = %d",
++			ce.pid, errno);
+ 	    exit(1);
+ 	}
+     }
++
++    if (ret < 0 && errno != ECHILD)
++    {
++	/* waitpid returned with -1 (indicating error). */
++	do_log(LOG_ERR, "Failed while reaping child processes. err = %d",
++			errno);
++	exit(1);
++    }
+ }
+ 
+ /* Poll the existing interface state, so we can catch any state

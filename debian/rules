@@ -4,10 +4,9 @@
 export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 
 export initdir=$$(prefix)/etc/init.d
-export scriptdir=$$(prefix)/etc/netplug
 
 %:
-	dh $@
+	dh $@ --with systemd
 
 override_dh_auto_install:
 	dh_auto_install
